@@ -253,12 +253,12 @@ export class Renderer {
     ctx.restore();
     ctx.globalAlpha = 1;
 
-    // Damage numbers.
-    ctx.font = 'bold 15px "Trebuchet MS", sans-serif';
+    // Damage numbers (critical hits render bigger and gold).
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const fl of world.floaters) {
       ctx.globalAlpha = clamp(fl.life / fl.maxLife, 0, 1);
+      ctx.font = `bold ${fl.size || 15}px "Trebuchet MS", sans-serif`;
       ctx.fillStyle = fl.color;
       ctx.fillText(fl.text, fl.x - cam.x, fl.y - cam.y);
     }
@@ -338,6 +338,45 @@ export class Renderer {
       ctx.fillStyle = '#0b2b12';
       ctx.beginPath();
       ctx.arc(x, y, 4.5, 0, TAU);
+      ctx.fill();
+    } else if (enemy.kind === 'charger') {
+      // A lunging diamond: the wind-up flash (telegraph) already pulses it.
+      ctx.shadowColor = enemy.color;
+      ctx.shadowBlur = 14;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(Math.PI / 4);
+      const r = enemy.radius + (enemy.mode === 'windup' ? 3 : 0);
+      ctx.fillRect(-r * 0.75, -r * 0.75, r * 1.5, r * 1.5);
+      ctx.restore();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#fff3d6';
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, TAU);
+      ctx.fill();
+    } else if (enemy.kind === 'splitter') {
+      ctx.shadowColor = enemy.color;
+      ctx.shadowBlur = 12;
+      ctx.beginPath();
+      ctx.arc(x, y, enemy.radius, 0, TAU);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.beginPath();
+      ctx.arc(x - 5, y - 3, 3.4, 0, TAU);
+      ctx.arc(x + 5, y - 3, 3.4, 0, TAU);
+      ctx.arc(x, y + 5, 3.4, 0, TAU);
+      ctx.fill();
+    } else if (enemy.kind === 'mote') {
+      ctx.shadowColor = enemy.color;
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(x, y, enemy.radius, 0, TAU);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#efe6ff';
+      ctx.beginPath();
+      ctx.arc(x, y, 2.4, 0, TAU);
       ctx.fill();
     } else if (enemy.boss) {
       ctx.shadowColor = enemy.ring;
@@ -426,41 +465,60 @@ export class Renderer {
     ctx.restore();
   }
 
-  drawHUD(ctx, world) {
-    const p = world.player;
-    // XP bar across the top.
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, 0, VIEW.width, 10);
-    ctx.fillStyle = '#ffa62b';
-    ctx.fillRect(0, 0, VIEW.width * clamp(p.xp / p.xpNext, 0, 1), 10);
-    // Level badge.
+  // A dark panel with a thin edge: the shared backing for HUD chips, so text
+  // never sits bare on the swarm.
+  panel(ctx, x, y, w, h, r = 8) {
     ctx.fillStyle = PALETTE.panel;
-    roundRect(ctx, 14, 20, 118, 56, 8);
+    roundRect(ctx, x, y, w, h, r);
     ctx.fill();
     ctx.strokeStyle = PALETTE.panelEdge;
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    text(ctx, `LEVEL ${p.level}`, 73, 36, 15, PALETTE.text);
-    text(ctx, `${p.xp} / ${p.xpNext} XP`, 73, 58, 13, PALETTE.textDim);
-    // Health bar.
+  }
+
+  drawHUD(ctx, world) {
+    const p = world.player;
+    // XP bar across the top, with a bright leading edge.
+    const xpFrac = clamp(p.xp / p.xpNext, 0, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, VIEW.width, 12);
+    ctx.fillStyle = '#ffa62b';
+    ctx.fillRect(0, 0, VIEW.width * xpFrac, 12);
+    if (xpFrac > 0) {
+      ctx.fillStyle = '#ffd23c';
+      ctx.fillRect(Math.max(0, VIEW.width * xpFrac - 2), 0, 2, 12);
+    }
+    // Level badge, top left.
+    this.panel(ctx, 14, 22, 118, 56);
+    text(ctx, `LEVEL ${p.level}`, 73, 40, 15, PALETTE.text);
+    text(ctx, `${p.xp} / ${p.xpNext} XP`, 73, 62, 13, PALETTE.textDim);
+    // Health bar, under the level badge: green to red by fraction, with a border.
     const hpW = 220;
+    const hpFrac = clamp(p.hp / p.maxHp, 0, 1);
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    roundRect(ctx, 14, 84, hpW, 20, 6);
+    roundRect(ctx, 14, 86, hpW, 20, 6);
     ctx.fill();
-    ctx.fillStyle = p.hp / p.maxHp > 0.3 ? '#ff6b4a' : PALETTE.danger;
-    roundRect(ctx, 14, 84, hpW * clamp(p.hp / p.maxHp, 0, 1), 20, 6);
-    ctx.fill();
-    text(ctx, `${Math.ceil(p.hp)} / ${p.maxHp}`, 124, 94, 13, '#ffffff');
+    ctx.fillStyle = hpFrac > 0.5 ? '#7ee081' : hpFrac > 0.3 ? '#ffa62b' : PALETTE.danger;
+    if (hpFrac > 0) {
+      roundRect(ctx, 14, 86, hpW * hpFrac, 20, 6);
+      ctx.fill();
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+    roundRect(ctx, 14, 86, hpW, 20, 6);
+    ctx.stroke();
+    text(ctx, `${Math.ceil(p.hp)} / ${p.maxHp}`, 124, 96, 13, '#ffffff');
     // Timer and wave, top centre, on a dark pill so the swarm never hides it.
     const remain = SURVIVE_SECONDS - world.time;
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    roundRect(ctx, VIEW.width / 2 - 112, 14, 224, 66, 10);
+    roundRect(ctx, VIEW.width / 2 - 112, 16, 224, 66, 10);
     ctx.fill();
-    text(ctx, formatTime(remain), VIEW.width / 2, 40, 34, PALETTE.text);
-    text(ctx, `WAVE ${world.wave}  •  DAWN IN ${formatTime(remain)}`, VIEW.width / 2, 68, 13, PALETTE.textDim);
-    // Score and kills, top right.
-    text(ctx, `SCORE ${world.score}`, VIEW.width - 16, 34, 18, PALETTE.text, 'right');
-    text(ctx, `${world.kills} SLAIN  •  STREAK ${world.streak}`, VIEW.width - 16, 58, 13, PALETTE.textDim, 'right');
+    text(ctx, formatTime(remain), VIEW.width / 2, 42, 34, PALETTE.text);
+    text(ctx, `WAVE ${world.wave}`, VIEW.width / 2, 70, 13, PALETTE.textDim);
+    // Score and kills, top right, on a panel like the level badge.
+    this.panel(ctx, VIEW.width - 230, 22, 216, 56);
+    text(ctx, `SCORE ${world.score}`, VIEW.width - 122, 40, 16, PALETTE.text, 'center');
+    text(ctx, `${world.kills} SLAIN  •  STREAK ${world.streak}`, VIEW.width - 122, 62, 12, PALETTE.textDim, 'center');
     // Boss bar.
     const boss = world.enemies.find((e) => e.boss);
     if (boss) {
@@ -473,6 +531,10 @@ export class Renderer {
       ctx.fillStyle = '#ff3d7e';
       roundRect(ctx, x0, y0, w * clamp(boss.hp / boss.maxHp, 0, 1), 16, 6);
       ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, x0, y0, w, 16, 6);
+      ctx.stroke();
       text(ctx, boss.name.toUpperCase(), VIEW.width / 2, y0 + 30, 13, '#ffd23c');
     }
     // Banner.
@@ -482,7 +544,13 @@ export class Renderer {
       text(ctx, world.banner, VIEW.width / 2, 150, 30, '#ffd23c');
       ctx.globalAlpha = 1;
     }
-    // Weapon icons, bottom left.
+    // Early controls hint, fading out over the first seconds of a run.
+    if (world.time < 12) {
+      ctx.globalAlpha = clamp((12 - world.time) / 3, 0, 1) * 0.95;
+      text(ctx, 'WASD / ARROWS — MOVE     •     WEAPONS FIRE ON THEIR OWN     •     GRAB THE EMBERS', VIEW.width / 2, VIEW.height - 72, 15, PALETTE.text);
+      ctx.globalAlpha = 1;
+    }
+    // Weapon icons, bottom left, with passive chips beside them.
     let wx = 16;
     for (const [id, level] of Object.entries(p.weapons)) {
       ctx.fillStyle = PALETTE.panel;
@@ -494,6 +562,17 @@ export class Renderer {
       text(ctx, this.weaponGlyph(id), wx + 23, VIEW.height - 40, 20, PALETTE.text);
       text(ctx, `Lv${level}`, wx + 23, VIEW.height - 20, 10, PALETTE.textDim);
       wx += 54;
+    }
+    for (const [id, level] of Object.entries(p.passives)) {
+      ctx.fillStyle = PALETTE.panel;
+      roundRect(ctx, wx, VIEW.height - 52, 40, 40, 8);
+      ctx.fill();
+      ctx.strokeStyle = PALETTE.panelEdge;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      text(ctx, this.weaponGlyph(id), wx + 20, VIEW.height - 40, 17, PALETTE.textDim);
+      text(ctx, `Lv${level}`, wx + 20, VIEW.height - 20, 9, PALETTE.textDim);
+      wx += 46;
     }
     // Low health vignette.
     if (p.hp / p.maxHp < 0.3 && !world.over) {
@@ -529,16 +608,26 @@ export class Renderer {
   drawTitle(ctx, world, best) {
     ctx.fillStyle = 'rgba(8, 5, 3, 0.62)';
     ctx.fillRect(0, 0, VIEW.width, VIEW.height);
+    // A soft ember glow behind the title so it lifts off the swarm.
+    const glow = ctx.createRadialGradient(VIEW.width / 2, 200, 10, VIEW.width / 2, 200, 340);
+    glow.addColorStop(0, 'rgba(255,154,60,0.28)');
+    glow.addColorStop(1, 'rgba(255,154,60,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 0, VIEW.width, VIEW.height);
     text(ctx, 'EMBERFALL', VIEW.width / 2, 190, 92, '#ffb347');
     text(ctx, 'S U R V I V E   T H E   S W A R M', VIEW.width / 2, 252, 22, '#ff7b2f');
-    text(ctx, 'The swarm comes at dusk. Your embers answer on their own —', VIEW.width / 2, 320, 18, PALETTE.text);
-    text(ctx, 'you just have to keep moving. Last until dawn: 5:00.', VIEW.width / 2, 346, 18, PALETTE.text);
+    text(ctx, '✦  Five weapons, five passives — build your arsenal as you level', VIEW.width / 2, 312, 17, PALETTE.text);
+    text(ctx, '❂  Bosses wake at 1:00, 2:30 and 4:00 — survive until dawn, 5:00', VIEW.width / 2, 338, 17, PALETTE.text);
     const pulse = 0.65 + 0.35 * Math.sin(world.time * 3);
     ctx.globalAlpha = pulse;
-    text(ctx, 'CLICK OR PRESS ENTER TO PLAY', VIEW.width / 2, 420, 24, '#ffd23c');
+    text(ctx, 'CLICK OR PRESS ENTER TO PLAY', VIEW.width / 2, 412, 24, '#ffd23c');
     ctx.globalAlpha = 1;
-    text(ctx, 'Move  WASD / Arrow keys      Level up  Click a card or press 1 / 2 / 3', VIEW.width / 2, 480, 16, PALETTE.textDim);
-    text(ctx, 'Pause  P      Mute  M      Restart  R', VIEW.width / 2, 508, 16, PALETTE.textDim);
+    // Controls on a dim panel so they read over the moving swarm.
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    roundRect(ctx, VIEW.width / 2 - 330, 448, 660, 72, 10);
+    ctx.fill();
+    text(ctx, 'Move  WASD / Arrow keys      Level up  Click a card or press 1 / 2 / 3', VIEW.width / 2, 472, 16, PALETTE.textDim);
+    text(ctx, 'Pause  P      Mute  M      Restart  R', VIEW.width / 2, 500, 16, PALETTE.textDim);
     if (best && best.score > 0) {
       text(ctx, `BEST  ${best.score}  •  SURVIVED ${formatTime(best.time)}`, VIEW.width / 2, 566, 16, '#ffd23c');
     }
@@ -558,19 +647,59 @@ export class Renderer {
     const y0 = 230;
     choices.forEach((choice, i) => {
       const x = x0 + i * (cardW + gap);
-      const hovered = mouse.x >= x && mouse.x <= x + cardW && mouse.y >= y0 && mouse.y <= y0 + cardH;
-      ctx.fillStyle = hovered ? '#33200c' : PALETTE.card;
-      roundRect(ctx, x, y0, cardW, cardH, 12);
-      ctx.fill();
+      const y = y0;
+      const hovered = mouse.x >= x && mouse.x <= x + cardW && mouse.y >= y && mouse.y <= y + cardH;
+      // Card body: a glow and a hotter border on hover.
+      if (hovered) {
+        ctx.save();
+        ctx.shadowColor = '#ffb347';
+        ctx.shadowBlur = 24;
+        ctx.fillStyle = '#33200c';
+        roundRect(ctx, x, y, cardW, cardH, 12);
+        ctx.fill();
+        ctx.restore();
+      } else {
+        ctx.fillStyle = PALETTE.card;
+        roundRect(ctx, x, y, cardW, cardH, 12);
+        ctx.fill();
+      }
       ctx.strokeStyle = hovered ? PALETTE.cardHot : PALETTE.cardEdge;
       ctx.lineWidth = hovered ? 3 : 2;
+      roundRect(ctx, x, y, cardW, cardH, 12);
       ctx.stroke();
       const def = choice.def;
-      text(ctx, this.weaponGlyph(choice.id), x + cardW / 2, y0 + 52, 44, '#ffb347');
-      text(ctx, def.name.toUpperCase(), x + cardW / 2, y0 + 108, 20, PALETTE.text);
-      text(ctx, choice.isNew ? 'NEW' : `LEVEL ${choice.level}`, x + cardW / 2, y0 + 136, 14, '#ffd23c');
-      this.wrapText(ctx, def.blurb, x + cardW / 2, y0 + 168, cardW - 40, 15, PALETTE.textDim);
-      text(ctx, `[ ${i + 1} ]`, x + cardW / 2, y0 + cardH - 22, 13, PALETTE.textDim);
+      const kindTag = def.kind === 'weapon' ? 'WEAPON' : def.kind === 'passive' ? 'PASSIVE' : 'RECOVERY';
+      text(ctx, kindTag, x + cardW / 2, y + 22, 11, PALETTE.textDim);
+      // Glyph in a glowing circle.
+      ctx.save();
+      ctx.shadowColor = '#ff9a3c';
+      ctx.shadowBlur = hovered ? 20 : 10;
+      ctx.fillStyle = '#3a2410';
+      ctx.beginPath();
+      ctx.arc(x + cardW / 2, y + 62, 30, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+      text(ctx, this.weaponGlyph(choice.id), x + cardW / 2, y + 63, 30, '#ffb347');
+      text(ctx, def.name.toUpperCase(), x + cardW / 2, y + 112, 19, PALETTE.text);
+      // Level pill: NEW in gold, otherwise the level being bought.
+      const pill = choice.isNew ? 'NEW' : `LEVEL ${choice.level}`;
+      const pillW = choice.isNew ? 64 : 96;
+      ctx.fillStyle = choice.isNew ? '#ffd23c' : 'rgba(0,0,0,0.45)';
+      roundRect(ctx, x + cardW / 2 - pillW / 2, y + 128, pillW, 22, 11);
+      ctx.fill();
+      text(ctx, pill, x + cardW / 2, y + 139, 12, choice.isNew ? '#241708' : '#ffd23c');
+      this.wrapText(ctx, def.blurb, x + cardW / 2, y + 166, cardW - 40, 14, PALETTE.textDim);
+      // Key cap for the 1 / 2 / 3 shortcut.
+      const kx = x + cardW / 2 - 14;
+      const ky = y + cardH - 26;
+      ctx.fillStyle = hovered ? '#ffd23c' : 'rgba(255,255,255,0.08)';
+      roundRect(ctx, kx, ky, 28, 22, 5);
+      ctx.fill();
+      ctx.strokeStyle = hovered ? '#ffd23c' : PALETTE.panelEdge;
+      ctx.lineWidth = 1;
+      roundRect(ctx, kx, ky, 28, 22, 5);
+      ctx.stroke();
+      text(ctx, String(i + 1), x + cardW / 2, ky + 11, 13, hovered ? '#241708' : PALETTE.textDim);
     });
   }
 
@@ -614,16 +743,41 @@ export class Renderer {
   drawOver(ctx, world, best) {
     ctx.fillStyle = 'rgba(12, 4, 3, 0.78)';
     ctx.fillRect(0, 0, VIEW.width, VIEW.height);
-    text(ctx, 'THE SWARM CLAIMS YOU', VIEW.width / 2, 170, 52, '#ff4d4d');
-    text(ctx, 'The embers fade — but they remember.', VIEW.width / 2, 222, 18, PALETTE.textDim);
-    this.statsLines(world, best).forEach((row, i) => {
-      const y = 300 + i * 44;
-      text(ctx, row[0], VIEW.width / 2 - 130, y, 17, PALETTE.textDim, 'right');
-      text(ctx, row[1], VIEW.width / 2 + 130, y, 20, PALETTE.text, 'left');
+    text(ctx, 'THE SWARM CLAIMS YOU', VIEW.width / 2, 150, 52, '#ff4d4d');
+    text(ctx, 'The embers fade — but they remember.', VIEW.width / 2, 202, 18, PALETTE.textDim);
+    if (world.score > 0 && world.score === best.score) {
+      ctx.fillStyle = '#ffd23c';
+      roundRect(ctx, VIEW.width / 2 - 90, 226, 180, 30, 15);
+      ctx.fill();
+      text(ctx, '★ NEW BEST ★', VIEW.width / 2, 241, 15, '#241708');
+    }
+    const rows = this.statsLines(world, best);
+    const panelW = 460;
+    const panelH = rows.length * 44 + 28;
+    const px = VIEW.width / 2 - panelW / 2;
+    const py = 282;
+    this.panel(ctx, px, py, panelW, panelH);
+    rows.forEach((row, i) => {
+      const y = py + 34 + i * 44;
+      text(ctx, row[0], px + 28, y, 15, PALETTE.textDim, 'left');
+      text(ctx, row[1], px + panelW - 28, y, 19, PALETTE.text, 'right');
     });
+    const tips = [
+      'Tip: never stop moving — the swarm surrounds the still.',
+      'Tip: embers are experience — chase the gold, not the fight.',
+      'Tip: Frost Shards slow the swarm; Nova Pulse buys you room.',
+      'Tip: a Charger flashes before it lunges — sidestep, don\'t outrun it.',
+      'Tip: a magnet pickup vacuums every ember on the field.',
+      'Tip: bosses telegraph their charge — step aside as they flash.',
+    ];
+    text(ctx, tips[Math.floor(world.time) % tips.length], VIEW.width / 2, py + panelH + 34, 15, PALETTE.textDim);
     const pulse = 0.65 + 0.35 * Math.sin(world.time * 3);
     ctx.globalAlpha = pulse;
-    text(ctx, 'PRESS R OR CLICK TO TRY AGAIN', VIEW.width / 2, 560, 22, '#ffd23c');
+    ctx.strokeStyle = '#ffd23c';
+    ctx.lineWidth = 2;
+    roundRect(ctx, VIEW.width / 2 - 210, 576, 420, 46, 12);
+    ctx.stroke();
+    text(ctx, 'PRESS R OR CLICK TO TRY AGAIN', VIEW.width / 2, 599, 20, '#ffd23c');
     ctx.globalAlpha = 1;
   }
 
@@ -632,14 +786,33 @@ export class Renderer {
     ctx.fillRect(0, 0, VIEW.width, VIEW.height);
     text(ctx, 'DAWN BREAKS', VIEW.width / 2, 150, 56, '#ffd23c');
     text(ctx, 'You survived the night. The swarm is ash.', VIEW.width / 2, 208, 18, PALETTE.text);
-    this.statsLines(world, best).forEach((row, i) => {
-      const y = 290 + i * 44;
-      text(ctx, row[0], VIEW.width / 2 - 130, y, 17, PALETTE.textDim, 'right');
-      text(ctx, row[1], VIEW.width / 2 + 130, y, 20, PALETTE.text, 'left');
+    if (world.score > 0 && world.score === best.score) {
+      ctx.fillStyle = '#ffd23c';
+      roundRect(ctx, VIEW.width / 2 - 90, 232, 180, 30, 15);
+      ctx.fill();
+      text(ctx, '★ NEW BEST ★', VIEW.width / 2, 247, 15, '#241708');
+    }
+    const rows = this.statsLines(world, best);
+    const panelW = 460;
+    const panelH = rows.length * 44 + 28;
+    const px = VIEW.width / 2 - panelW / 2;
+    const py = 286;
+    this.panel(ctx, px, py, panelW, panelH);
+    rows.forEach((row, i) => {
+      const y = py + 34 + i * 44;
+      text(ctx, row[0], px + 28, y, 15, PALETTE.textDim, 'left');
+      text(ctx, row[1], px + panelW - 28, y, 19, PALETTE.text, 'right');
     });
+    const arsenal = Object.entries(world.player.weapons)
+      .map(([id, level]) => `${this.weaponGlyph(id)} Lv${level}`).join('   ');
+    text(ctx, `ARSENAL   ${arsenal}`, VIEW.width / 2, py + panelH + 30, 17, PALETTE.textDim);
     const pulse = 0.65 + 0.35 * Math.sin(world.time * 3);
     ctx.globalAlpha = pulse;
-    text(ctx, 'PRESS R OR CLICK TO PLAY AGAIN', VIEW.width / 2, 560, 22, '#ffd23c');
+    ctx.strokeStyle = '#ffd23c';
+    ctx.lineWidth = 2;
+    roundRect(ctx, VIEW.width / 2 - 210, 596, 420, 46, 12);
+    ctx.stroke();
+    text(ctx, 'PRESS R OR CLICK TO PLAY AGAIN', VIEW.width / 2, 619, 20, '#ffd23c');
     ctx.globalAlpha = 1;
   }
 

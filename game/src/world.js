@@ -30,6 +30,7 @@ export class World {
     this.hitStop = 0;
     this.spawnTimer = 0.5;
     this.bossIndex = 0;
+    this.warnedBoss = false;
     this.pendingLevelUps = 0;
     this.over = false;
     this.won = false;
@@ -87,9 +88,9 @@ export class World {
     const ownedCount = Object.keys(owned).length;
     for (const [id, def] of Object.entries(WEAPONS)) {
       if (owned[id] === undefined) {
-        if (ownedCount < 4) pool.push({ weight: 3, value: { id, level: 1, isNew: true, def } });
+        if (ownedCount < 4) pool.push({ weight: 2, value: { id, level: 1, isNew: true, def } });
       } else if (owned[id] < def.maxLevel) {
-        pool.push({ weight: 2, value: { id, level: owned[id] + 1, isNew: false, def } });
+        pool.push({ weight: 3, value: { id, level: owned[id] + 1, isNew: false, def } });
       }
     }
     for (const [id, def] of Object.entries(PASSIVES)) {
@@ -103,6 +104,14 @@ export class World {
       choices.push(choice);
       const index = remaining.findIndex((entry) => entry.value.id === choice.id);
       if (index >= 0) remaining.splice(index, 1);
+    }
+    // A level-up should always offer something to fight with: if the draw came
+    // up all passives while a weapon is available, swap the last card for one.
+    if (choices.length === 3 && !choices.some((c) => c.def.kind === 'weapon')) {
+      const weaponOptions = remaining.filter((entry) => entry.value.def.kind === 'weapon');
+      if (weaponOptions.length > 0) {
+        choices[choices.length - 1] = pickWeighted(this.rng, weaponOptions);
+      }
     }
     while (choices.length < 3) {
       choices.push({ id: 'heal', level: 1, isNew: false, def: { name: 'Second Wind', blurb: 'Recover 50 health right now.' } });
@@ -131,7 +140,7 @@ export class World {
       p.passives[choice.id] = choice.level;
       this.recomputePassives();
       if (choice.id === 'emberHeart') {
-        p.hp = Math.min(p.maxHp, p.hp + 25);
+        p.hp = Math.min(p.maxHp, p.hp + 30);
         this.addFloater(p.x, p.y - 30, '+25', '#7ee081');
       }
     }
@@ -159,8 +168,11 @@ export class World {
       p.xpNext = xpForLevel(p.level);
       this.pendingLevelUps += 1;
       this.events.push({ type: 'levelup' });
+      p.hp = Math.min(p.maxHp, p.hp + 8);
       this.audio.levelUp();
-      this.addParticles(p.x, p.y, '#ffd23c', 26, 260);
+      this.addParticles(p.x, p.y, '#ffd23c', 40, 320);
+      this.addParticles(p.x, p.y, '#ff9a3c', 14, 200);
+      this.shake = Math.max(this.shake, 6);
     }
   }
 
@@ -187,17 +199,24 @@ export class World {
   spawnEnemy(kind, x, y) {
     const def = ENEMIES[kind];
     const point = x === undefined ? this.spawnPoint() : { x, y };
+    // The swarm toughens as the night wears on: +140% health, +50% speed and
+    // +67% damage by dawn, so the late game stays a fight instead of a mop-up.
+    const hpScale = 1 + (this.time / SURVIVE_SECONDS) * 1.4;
+    const speedScale = 1 + this.time / 600;
+    const dmgScale = 1 + this.time / 450;
+    const hp = Math.round(def.hp * hpScale);
     this.enemies.push({
       kind, name: def.name,
       x: point.x, y: point.y, vx: 0, vy: 0,
-      radius: def.radius, hp: def.hp, maxHp: def.hp,
-      speed: def.speed * range(this.rng, 0.92, 1.08),
-      damage: def.damage, xp: def.xp, color: def.color, score: def.score,
+      radius: def.radius, hp, maxHp: hp,
+      speed: def.speed * range(this.rng, 0.92, 1.08) * speedScale,
+      damage: Math.round(def.damage * dmgScale), xp: def.xp, color: def.color, score: def.score,
       ranged: !!def.ranged, range: def.range || 0, shotTimer: range(this.rng, 0.5, 2),
       shotCooldown: def.shotCooldown || 0,
       flash: 0, slowTimer: 0, slowFactor: 1, hitTimer: 0, orbitTimer: 0,
       boss: false, pattern: null, patternTimer: 0, telegraph: 0, chargeVx: 0, chargeVy: 0,
       wobble: range(this.rng, 0, TAU),
+      mode: 'hunt', modeTimer: 0, dashCd: range(this.rng, 1, 2), dashVx: 0, dashVy: 0,
     });
   }
 
@@ -221,6 +240,7 @@ export class World {
     this.events.push({ type: 'boss', name: def.name });
     this.audio.boss();
     this.shake = Math.max(this.shake, 12);
+    this.warnedBoss = false;
   }
 
   // -- combat --------------------------------------------------------------
@@ -288,6 +308,12 @@ export class World {
   }
 
   damageEnemy(enemy, amount, kx, ky) {
+    // One hit in ten lands critical: double damage, a bigger golden number.
+    let crit = false;
+    if (this.rng() < 0.1) {
+      amount *= 2;
+      crit = true;
+    }
     enemy.hp -= amount;
     enemy.flash = 0.09;
     if (kx !== undefined) {
@@ -296,7 +322,11 @@ export class World {
       enemy.vy += (ky / len) * 60;
     }
     if (this.floaters.length < 42) {
-      this.addFloater(enemy.x + range(this.rng, -8, 8), enemy.y - enemy.radius - 4, String(Math.round(amount)), '#ffe9b0');
+      this.addFloater(
+        enemy.x + range(this.rng, -8, 8), enemy.y - enemy.radius - 4,
+        crit ? `${Math.round(amount)}!` : String(Math.round(amount)),
+        crit ? '#ffd23c' : '#ffe9b0', crit ? 21 : 15,
+      );
     }
     if (enemy.hp <= 0) this.killEnemy(enemy);
   }
@@ -314,6 +344,12 @@ export class World {
     }
     this.addParticles(enemy.x, enemy.y, enemy.color, enemy.boss ? 46 : 12, enemy.boss ? 320 : 180);
     this.addParticles(enemy.x, enemy.y, '#ffb347', enemy.boss ? 20 : 5, 120);
+    if (enemy.kind === 'brute') this.hitStop = Math.max(this.hitStop, 0.02);
+    if (enemy.kind === 'splitter' && this.enemies.length < MAX_ENEMIES + 20) {
+      for (let i = 0; i < 2; i += 1) {
+        this.spawnEnemy('mote', enemy.x + range(this.rng, -14, 14), enemy.y + range(this.rng, -14, 14));
+      }
+    }
     if (enemy.boss) {
       this.shake = Math.max(this.shake, 16);
       this.hitStop = 0.06;
@@ -326,7 +362,7 @@ export class World {
       return;
     }
     this.gems.push({ x: enemy.x, y: enemy.y, value: enemy.xp, big: enemy.xp >= 5, vx: 0, vy: 0 });
-    if (enemy.kind === 'brute' && chance(this.rng, 0.12)) {
+    if (enemy.kind === 'brute' && chance(this.rng, 0.2)) {
       this.pickups.push({ x: enemy.x, y: enemy.y, kind: 'health', vx: 0, vy: 0 });
     }
   }
@@ -335,7 +371,7 @@ export class World {
     const p = this.player;
     if (p.iframes > 0 || this.over) return;
     p.hp -= amount;
-    p.iframes = 0.6;
+    p.iframes = 0.4;
     p.hurtFlash = 0.25;
     this.shake = Math.max(this.shake, 10);
     this.streak = 0;
@@ -375,8 +411,8 @@ export class World {
     }
   }
 
-  addFloater(x, y, text, color) {
-    this.floaters.push({ x, y, text, color, life: 0.8, maxLife: 0.8 });
+  addFloater(x, y, text, color, size = 15) {
+    this.floaters.push({ x, y, text, color, size, life: 0.8, maxLife: 0.8 });
   }
 
   // -- step ------------------------------------------------------------------
@@ -399,7 +435,7 @@ export class World {
     if (p.iframes > 0) p.iframes -= dt;
     if (p.hurtFlash > 0) p.hurtFlash -= dt;
     // A slow ember mend: the Warden recovers a little between hits.
-    if (p.hp > 0 && p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp + 0.6 * dt);
+    if (p.hp > 0 && p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp + 0.3 * dt);
 
     // Movement.
     const move = input.moveVector();
@@ -506,10 +542,48 @@ export class World {
       const ny = dy / dist;
       let mx = nx;
       let my = ny;
+      let moveSpeed = enemy.speed * slow;
       if (enemy.boss) {
         this.updateBoss(enemy, dt, nx, ny, dist);
         mx = enemy.vx;
         my = enemy.vy;
+        moveSpeed = 1;
+      } else if (enemy.kind === 'charger') {
+        // Hunt, telegraph, dash: close in, flash a warning, then lunge straight
+        // at where the Warden stood. Sidestep the flash, don't outrun the dash.
+        if (enemy.mode === 'windup') {
+          enemy.modeTimer -= dt;
+          enemy.telegraph = Math.max(enemy.telegraph, enemy.modeTimer);
+          mx = 0;
+          my = 0;
+          moveSpeed = 0;
+          if (enemy.modeTimer <= 0) {
+            enemy.mode = 'dash';
+            enemy.modeTimer = 0.4;
+            enemy.dashVx = nx;
+            enemy.dashVy = ny;
+            this.audio.shoot();
+          }
+        } else if (enemy.mode === 'dash') {
+          enemy.modeTimer -= dt;
+          mx = enemy.dashVx;
+          my = enemy.dashVy;
+          moveSpeed = 520;
+          if (enemy.modeTimer <= 0) {
+            enemy.mode = 'hunt';
+            enemy.dashCd = 2.5;
+          }
+        } else {
+          enemy.dashCd -= dt;
+          const wob = Math.sin(this.time * 2.2 + enemy.wobble) * 0.25;
+          mx = nx - ny * wob;
+          my = ny + nx * wob;
+          if (dist < 280 && enemy.dashCd <= 0) {
+            enemy.mode = 'windup';
+            enemy.modeTimer = 0.45;
+            enemy.telegraph = 0.45;
+          }
+        }
       } else if (enemy.ranged) {
         if (dist > enemy.range) {
           mx = nx; my = ny;
@@ -523,10 +597,14 @@ export class World {
         enemy.shotTimer -= dt;
         if (enemy.shotTimer <= 0 && dist < enemy.range + 120) {
           enemy.shotTimer = enemy.shotCooldown;
-          const speed = 240;
+          // Aimed with a wobble, and slow enough to sidestep: standing still
+          // gets you shot, moving across the shot's line dodges it.
+          const aimErr = range(this.rng, -0.14, 0.14);
+          const angle = Math.atan2(ny, nx) + aimErr;
+          const speed = 215;
           this.foeShots.push({
             x: enemy.x, y: enemy.y,
-            vx: nx * speed, vy: ny * speed,
+            vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
             radius: 6, damage: enemy.damage, life: 3,
           });
         }
@@ -535,7 +613,7 @@ export class World {
         mx = nx - ny * wob;
         my = ny + nx * wob;
       }
-      const speed = enemy.boss ? 1 : enemy.speed * slow;
+      const speed = moveSpeed;
       const len = Math.hypot(mx, my) || 1;
       enemy.x += ((mx / len) * speed + enemy.vx) * dt;
       enemy.y += ((my / len) * speed + enemy.vy) * dt;
@@ -620,14 +698,18 @@ export class World {
     }
 
     // Gems: drift to the player inside the magnet radius, collect on touch.
+    // A slow drift even outside the radius keeps far kills from feeling wasted.
     for (let i = this.gems.length - 1; i >= 0; i -= 1) {
       const gem = this.gems[i];
       const d = distance(gem.x, gem.y, p.x, p.y);
+      const angle = angleTo(gem.x, gem.y, p.x, p.y);
       if (d < p.magnet) {
-        const pull = 620 * (1 - d / (p.magnet + 40));
-        const angle = angleTo(gem.x, gem.y, p.x, p.y);
+        const pull = 780 * (1 - d / (p.magnet + 40));
         gem.vx += Math.cos(angle) * pull * dt * 4;
         gem.vy += Math.sin(angle) * pull * dt * 4;
+      } else if (d < p.magnet * 2) {
+        gem.vx += Math.cos(angle) * 60 * dt * 4;
+        gem.vy += Math.sin(angle) * 60 * dt * 4;
       }
       gem.x += gem.vx * dt;
       gem.y += gem.vy * dt;
@@ -636,6 +718,7 @@ export class World {
       if (d < p.radius + 12) {
         this.gems.splice(i, 1);
         this.audio.pickup();
+        this.addParticles(gem.x, gem.y, '#ffa62b', 3, 90);
         this.addXp(gem.value);
       }
     }
@@ -693,7 +776,7 @@ export class World {
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0 && this.enemies.length < MAX_ENEMIES) {
       this.spawnTimer = row.interval;
-      const kinds = ['wisp', 'cinder', 'brute', 'spitter'];
+      const kinds = ['wisp', 'cinder', 'brute', 'spitter', 'charger', 'splitter'];
       for (let i = 0; i < row.batch; i += 1) {
         if (this.enemies.length >= MAX_ENEMIES) break;
         const kind = pickWeighted(this.rng, kinds.map((k, idx) => ({ weight: row.weights[idx], value: k })));
@@ -706,6 +789,11 @@ export class World {
       this.showBanner(`WAVE ${this.wave} — THE SWARM THICKENS`, 2);
     }
     const nextBoss = BOSSES[this.bossIndex];
+    if (nextBoss && !this.warnedBoss && this.time >= nextBoss.at - 3) {
+      this.warnedBoss = true;
+      this.showBanner(`⚠ ${nextBoss.name.toUpperCase()} APPROACHES ⚠`, 2.8);
+      this.audio.boss();
+    }
     if (nextBoss && this.time >= nextBoss.at) this.spawnBoss();
 
     // Victory.

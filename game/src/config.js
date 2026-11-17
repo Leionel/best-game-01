@@ -5,7 +5,7 @@ export const VIEW = { width: 1280, height: 720 };
 export const ARENA = { width: 2560, height: 1440 };
 export const STEP = 1 / 60;
 export const SURVIVE_SECONDS = 300;
-export const MAX_ENEMIES = 140;
+export const MAX_ENEMIES = 190;
 export const MAX_LEVEL_UP_CHOICES = 3;
 
 export const PALETTE = {
@@ -24,6 +24,9 @@ export const PALETTE = {
   cinder: '#ff6b4a',
   brute: '#d63c2f',
   spitter: '#7ee081',
+  charger: '#ff8c42',
+  splitter: '#e879f9',
+  mote: '#d8b4fe',
   boss: '#ffd23c',
   bossRing: '#ff3d7e',
   shot: '#ffd9a0',
@@ -44,7 +47,7 @@ export const PLAYER_BASE = {
   radius: 16,
   speed: 186,
   maxHp: 100,
-  magnet: 140,
+  magnet: 170,
   damageMul: 1,
   cooldownMul: 1,
   xpNext: 6,
@@ -150,7 +153,7 @@ export const PASSIVES = {
 
 export const ENEMIES = {
   wisp: {
-    name: 'Wisp', radius: 10, hp: 12, speed: 90, damage: 5, xp: 1,
+    name: 'Wisp', radius: 10, hp: 12, speed: 90, damage: 6, xp: 1,
     color: PALETTE.wisp, score: 10,
   },
   cinder: {
@@ -158,12 +161,25 @@ export const ENEMIES = {
     color: PALETTE.cinder, score: 15,
   },
   brute: {
-    name: 'Brute', radius: 24, hp: 95, speed: 44, damage: 15, xp: 5,
+    name: 'Brute', radius: 24, hp: 95, speed: 48, damage: 18, xp: 5,
     color: PALETTE.brute, score: 30,
   },
   spitter: {
     name: 'Spitter', radius: 12, hp: 20, speed: 62, damage: 6, xp: 3,
-    color: PALETTE.spitter, score: 25, ranged: true, range: 280, shotCooldown: 2.4,
+    color: PALETTE.spitter, score: 25, ranged: true, range: 280, shotCooldown: 2.8,
+  },
+  charger: {
+    name: 'Charger', radius: 12, hp: 24, speed: 112, damage: 14, xp: 3,
+    color: PALETTE.charger, score: 20,
+  },
+  splitter: {
+    name: 'Splitter', radius: 13, hp: 32, speed: 66, damage: 7, xp: 2,
+    color: PALETTE.splitter, score: 20,
+  },
+  // Motes only ever hatch from a Splitter; the director never spawns them.
+  mote: {
+    name: 'Mote', radius: 7, hp: 8, speed: 102, damage: 4, xp: 1,
+    color: PALETTE.mote, score: 5,
   },
 };
 
@@ -185,20 +201,24 @@ export const BOSSES = [
   },
 ];
 
-// Spawn mix weights over time: [wisp, cinder, brute, spitter] at each minute mark.
+// Spawn mix weights over time: [wisp, cinder, brute, spitter, charger, splitter]
+// at each minute mark. Chargers join at 1:00 to punish standing still; splitters
+// join at 2:00 and keep the late swarm dense with hatched motes.
 export const SPAWN_TABLE = [
-  { at: 0, weights: [0.7, 0.3, 0, 0], interval: 1.2, batch: 1 },
-  { at: 30, weights: [0.55, 0.35, 0.05, 0.05], interval: 1.02, batch: 1 },
-  { at: 60, weights: [0.45, 0.35, 0.1, 0.1], interval: 0.88, batch: 2 },
-  { at: 90, weights: [0.4, 0.35, 0.12, 0.13], interval: 0.76, batch: 2 },
-  { at: 120, weights: [0.35, 0.35, 0.15, 0.15], interval: 0.64, batch: 2 },
-  { at: 180, weights: [0.3, 0.32, 0.2, 0.18], interval: 0.54, batch: 3 },
-  { at: 240, weights: [0.28, 0.3, 0.22, 0.2], interval: 0.44, batch: 3 },
-  { at: 270, weights: [0.25, 0.3, 0.25, 0.2], interval: 0.38, batch: 3 },
+  { at: 0, weights: [0.68, 0.32, 0, 0, 0, 0], interval: 1.0, batch: 1 },
+  { at: 30, weights: [0.55, 0.35, 0.05, 0.05, 0, 0], interval: 0.9, batch: 1 },
+  { at: 60, weights: [0.44, 0.33, 0.1, 0.08, 0.07, 0], interval: 0.86, batch: 2 },
+  { at: 90, weights: [0.4, 0.33, 0.12, 0.08, 0.07, 0], interval: 0.76, batch: 2 },
+  { at: 120, weights: [0.34, 0.33, 0.14, 0.1, 0.08, 0.02], interval: 0.64, batch: 2 },
+  { at: 180, weights: [0.3, 0.3, 0.18, 0.14, 0.09, 0.02], interval: 0.54, batch: 3 },
+  { at: 240, weights: [0.27, 0.28, 0.2, 0.15, 0.11, 0.03], interval: 0.34, batch: 3 },
+  { at: 270, weights: [0.25, 0.28, 0.22, 0.15, 0.12, 0.03], interval: 0.28, batch: 3 },
 ];
 
+// XP to go from `level` to `level + 1`: cheap early so the first upgrades land
+// fast, then a gentle quadratic so the late game still has something to earn.
 export function xpForLevel(level) {
-  return 6 + level * 5;
+  return 5 + level * 5 + Math.floor((level * level) / 10);
 }
 
 export function spawnRowAt(time) {
