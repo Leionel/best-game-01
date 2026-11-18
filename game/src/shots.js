@@ -9,7 +9,10 @@ import { ARENA, STEP, VIEW } from './config.js';
 import { clamp, distance } from './random.js';
 
 const TITLE_SECONDS = 5;
-const PLAY_SECONDS = 100;
+// 93 s lands three seconds into the first Ember Surge (90 s): the swarm is
+// pouring in twice as fast and the surge banner is still up, so the frame
+// shows the game at its busiest rather than its sparsest.
+const PLAY_SECONDS = 93;
 const BOSS_LIMIT_SECONDS = 130;
 const END_LIMIT_SECONDS = 600;
 

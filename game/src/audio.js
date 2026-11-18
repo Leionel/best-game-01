@@ -131,6 +131,13 @@ export class AudioEngine {
     this.noise({ dur: 0.5, vol: 0.16, freq: 300, q: 0.4 });
   }
 
+  surge() {
+    [392, 523.25, 659.25, 783.99].forEach((freq, i) => {
+      this.tone({ freq, at: i * 0.06, type: 'triangle', dur: 0.14, vol: 0.16 });
+    });
+    this.noise({ dur: 0.3, vol: 0.08, freq: 2000 });
+  }
+
   victory() {
     [523.25, 659.25, 783.99, 1046.5, 1318.5].forEach((freq, i) => {
       this.tone({ freq, at: i * 0.11, type: 'triangle', dur: 0.3, vol: 0.18 });

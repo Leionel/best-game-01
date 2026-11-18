@@ -7,6 +7,14 @@ export const STEP = 1 / 60;
 export const SURVIVE_SECONDS = 300;
 export const MAX_ENEMIES = 190;
 export const MAX_LEVEL_UP_CHOICES = 3;
+// One elite joins the swarm every 45 s: a bigger, tougher brute, charger or
+// cinder with a gold ring, worth a pickup and a burst of big embers.
+export const ELITE_EVERY = 45;
+// Ember Surges: ten seconds of doubled spawns, announced by a banner, with a
+// ring of embers dropped around the player. The last one lands in the final
+// stretch, so the run ends on a push rather than a mop-up.
+export const SURGE_TIMES = [90, 180, 270];
+export const SURGE_SECONDS = 10;
 
 export const PALETTE = {
   ground: '#161009',
@@ -176,6 +184,13 @@ export const ENEMIES = {
     name: 'Splitter', radius: 13, hp: 32, speed: 66, damage: 7, xp: 2,
     color: PALETTE.splitter, score: 20,
   },
+  // Cinderbursts detonate when they die: the blast scorches nearby foes (chain
+  // reactions if another burst is caught in it) and burns the Warden too if
+  // they stand too close. Pop them at range, never inside the pack.
+  bomber: {
+    name: 'Cinderburst', radius: 13, hp: 30, speed: 68, damage: 10, xp: 3,
+    color: '#ff5a2a', score: 25, blast: 110, blastDamage: 32,
+  },
   // Motes only ever hatch from a Splitter; the director never spawns them.
   mote: {
     name: 'Mote', radius: 7, hp: 8, speed: 102, damage: 4, xp: 1,
@@ -183,36 +198,41 @@ export const ENEMIES = {
   },
 };
 
+// Each boss cycles two patterns in turn, so the second minute of a boss fight
+// is not the first minute repeated: the Warden alternates its bullet ring
+// with a telegraphed charge, the Matriarch her charge with a bullet ring,
+// the Titan its summons with a bullet ring.
 export const BOSSES = [
   {
     name: 'Ember Warden', radius: 42, hp: 700, speed: 58, damage: 20,
     color: PALETTE.boss, ring: PALETTE.bossRing, xp: 40, at: 60,
-    pattern: 'burst', patternEvery: 4.5,
+    patterns: ['burst', 'charge'], patternEvery: 4.5,
   },
   {
     name: 'Cinder Matriarch', radius: 48, hp: 1300, speed: 52, damage: 22,
     color: '#ff7b9c', ring: PALETTE.boss, xp: 60, at: 150,
-    pattern: 'charge', patternEvery: 5.5,
+    patterns: ['charge', 'burst'], patternEvery: 5.5,
   },
   {
     name: 'Ash Titan', radius: 56, hp: 2200, speed: 46, damage: 26,
     color: '#c77dff', ring: PALETTE.boss, xp: 90, at: 240,
-    pattern: 'minions', patternEvery: 6,
+    patterns: ['minions', 'burst'], patternEvery: 6,
   },
 ];
 
-// Spawn mix weights over time: [wisp, cinder, brute, spitter, charger, splitter]
+// Spawn mix weights over time: [wisp, cinder, brute, spitter, charger, splitter, bomber]
 // at each minute mark. Chargers join at 1:00 to punish standing still; splitters
-// join at 2:00 and keep the late swarm dense with hatched motes.
+// join at 2:00 and keep the late swarm dense with hatched motes; cinderbursts
+// join at 1:30, so the mid-game pack has something volatile inside it.
 export const SPAWN_TABLE = [
-  { at: 0, weights: [0.68, 0.32, 0, 0, 0, 0], interval: 1.0, batch: 1 },
-  { at: 30, weights: [0.55, 0.35, 0.05, 0.05, 0, 0], interval: 0.9, batch: 1 },
-  { at: 60, weights: [0.44, 0.33, 0.1, 0.08, 0.07, 0], interval: 0.86, batch: 2 },
-  { at: 90, weights: [0.4, 0.33, 0.12, 0.08, 0.07, 0], interval: 0.76, batch: 2 },
-  { at: 120, weights: [0.34, 0.33, 0.14, 0.1, 0.08, 0.02], interval: 0.64, batch: 2 },
-  { at: 180, weights: [0.3, 0.3, 0.18, 0.14, 0.09, 0.02], interval: 0.54, batch: 3 },
-  { at: 240, weights: [0.27, 0.28, 0.2, 0.15, 0.11, 0.03], interval: 0.34, batch: 3 },
-  { at: 270, weights: [0.25, 0.28, 0.22, 0.15, 0.12, 0.03], interval: 0.28, batch: 3 },
+  { at: 0, weights: [0.68, 0.32, 0, 0, 0, 0, 0], interval: 1.0, batch: 1 },
+  { at: 30, weights: [0.55, 0.35, 0.05, 0.05, 0, 0, 0], interval: 0.9, batch: 1 },
+  { at: 60, weights: [0.44, 0.33, 0.1, 0.08, 0.07, 0, 0], interval: 0.86, batch: 2 },
+  { at: 90, weights: [0.4, 0.33, 0.12, 0.08, 0.07, 0, 0.06], interval: 0.76, batch: 2 },
+  { at: 120, weights: [0.34, 0.33, 0.14, 0.1, 0.08, 0.02, 0.07], interval: 0.64, batch: 2 },
+  { at: 180, weights: [0.3, 0.3, 0.18, 0.14, 0.09, 0.02, 0.08], interval: 0.54, batch: 3 },
+  { at: 240, weights: [0.27, 0.28, 0.2, 0.15, 0.11, 0.03, 0.09], interval: 0.3, batch: 3 },
+  { at: 270, weights: [0.25, 0.28, 0.22, 0.15, 0.12, 0.03, 0.09], interval: 0.24, batch: 4 },
 ];
 
 // XP to go from `level` to `level + 1`: cheap early so the first upgrades land

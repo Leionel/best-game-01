@@ -19,7 +19,11 @@ and you just have to keep moving. Last until dawn — 5:00 — and the night is 
 
 Five weapons (Ember Bolt, Orbit Flames, Nova Pulse, Frost Shards, Meteor Call) and
 five passives (Swift Boots, Ember Heart, Lodestone, Sharp Focus, Quick Hands), each
-with five levels. Your best score is kept in localStorage.
+with five levels. Seven foes stalk you — wisps, cinders, brutes, spitters, lunging
+chargers, splitters that hatch motes, and volatile Cinderbursts that detonate when
+they die — plus gold-ringed elites every 45 seconds and an Ember Surge at 1:30,
+3:00 and 4:30 that doubles the swarm for ten seconds. Your best score is kept in
+localStorage.
 
 ## Run it
 

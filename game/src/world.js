@@ -3,8 +3,8 @@
 // at a fixed 1/60 s and opens the level-up chooser when it asks for one.
 
 import {
-  ARENA, BOSSES, ENEMIES, MAX_ENEMIES, PASSIVES, PLAYER_BASE,
-  SURVIVE_SECONDS, WEAPONS, spawnRowAt, xpForLevel,
+  ARENA, BOSSES, ELITE_EVERY, ENEMIES, MAX_ENEMIES, PASSIVES, PLAYER_BASE,
+  SURGE_SECONDS, SURGE_TIMES, SURVIVE_SECONDS, WEAPONS, spawnRowAt, xpForLevel,
 } from './config.js';
 import { angleTo, chance, clamp, distance, pickWeighted, range } from './random.js';
 
@@ -26,11 +26,15 @@ export class World {
     this.wave = 1;
     this.banner = null;
     this.bannerTimer = 0;
+    this.bannerSticky = false;
     this.shake = 0;
     this.hitStop = 0;
     this.spawnTimer = 0.5;
     this.bossIndex = 0;
     this.warnedBoss = false;
+    this.eliteTimer = ELITE_EVERY;
+    this.surgeIndex = 0;
+    this.surgeTimer = 0;
     this.pendingLevelUps = 0;
     this.over = false;
     this.won = false;
@@ -43,6 +47,7 @@ export class World {
     this.particles = [];
     this.floaters = [];
     this.novas = [];
+    this.blasts = [];
     this.telegraphs = [];
     this.player = {
       x: ARENA.width / 2,
@@ -75,9 +80,13 @@ export class World {
     this.showBanner('SURVIVE UNTIL DAWN — 5:00', 2.6);
   }
 
-  showBanner(text, seconds) {
+  showBanner(text, seconds, sticky = false) {
+    // A sticky banner (an Ember Surge) is not pushed aside by a shorter one
+    // (an elite arriving on the same second) until it has run its course.
+    if (this.bannerSticky && this.bannerTimer > 0 && !sticky) return;
     this.banner = text;
     this.bannerTimer = seconds;
+    this.bannerSticky = sticky;
   }
 
   // -- level-ups -----------------------------------------------------------
@@ -196,7 +205,7 @@ export class World {
     return { x: clamp(x, -80, ARENA.width + 80), y: clamp(y, -80, ARENA.height + 80) };
   }
 
-  spawnEnemy(kind, x, y) {
+  spawnEnemy(kind, x, y, elite = false) {
     const def = ENEMIES[kind];
     const point = x === undefined ? this.spawnPoint() : { x, y };
     // The swarm toughens as the night wears on: +140% health, +50% speed and
@@ -204,18 +213,25 @@ export class World {
     const hpScale = 1 + (this.time / SURVIVE_SECONDS) * 1.4;
     const speedScale = 1 + this.time / 600;
     const dmgScale = 1 + this.time / 450;
-    const hp = Math.round(def.hp * hpScale);
+    // Elites are the same foe grown large: much tougher and harder-hitting,
+    // a little slower, worth three times the embers and three times the score.
+    const eliteHp = elite ? 4 : 1;
+    const eliteSpeed = elite ? 0.92 : 1;
+    const eliteDmg = elite ? 1.8 : 1;
+    const hp = Math.round(def.hp * hpScale * eliteHp);
     this.enemies.push({
       kind, name: def.name,
       x: point.x, y: point.y, vx: 0, vy: 0,
-      radius: def.radius, hp, maxHp: hp,
-      speed: def.speed * range(this.rng, 0.92, 1.08) * speedScale,
-      damage: Math.round(def.damage * dmgScale), xp: def.xp, color: def.color, score: def.score,
+      radius: elite ? Math.round(def.radius * 1.3) : def.radius, hp, maxHp: hp,
+      speed: def.speed * range(this.rng, 0.92, 1.08) * speedScale * eliteSpeed,
+      damage: Math.round(def.damage * dmgScale * eliteDmg),
+      xp: elite ? def.xp * 3 : def.xp, color: def.color,
+      score: elite ? def.score * 3 : def.score,
       ranged: !!def.ranged, range: def.range || 0, shotTimer: range(this.rng, 0.5, 2),
       shotCooldown: def.shotCooldown || 0,
       flash: 0, slowTimer: 0, slowFactor: 1, hitTimer: 0, orbitTimer: 0,
       boss: false, pattern: null, patternTimer: 0, telegraph: 0, chargeVx: 0, chargeVy: 0,
-      wobble: range(this.rng, 0, TAU),
+      wobble: range(this.rng, 0, TAU), elite: !!elite,
       mode: 'hunt', modeTimer: 0, dashCd: range(this.rng, 1, 2), dashVx: 0, dashVy: 0,
     });
   }
@@ -233,8 +249,10 @@ export class World {
       color: def.color, ring: def.ring, score: 500,
       ranged: false, range: 0, shotTimer: 0, shotCooldown: 0,
       flash: 0, slowTimer: 0, slowFactor: 1, hitTimer: 0, orbitTimer: 0,
-      boss: true, pattern: def.pattern, patternTimer: 2.5, telegraph: 0, chargeVx: 0, chargeVy: 0,
-      wobble: 0,
+      boss: true, patternList: def.patterns, pattern: def.patterns[0],
+      patternIdx: 0, patternEvery: def.patternEvery, patternTimer: 2.5,
+      telegraph: 0, chargeVx: 0, chargeVy: 0,
+      wobble: 0, elite: false,
     });
     this.showBanner(`${def.name.toUpperCase()} AWAKENS`, 2.6);
     this.events.push({ type: 'boss', name: def.name });
@@ -348,6 +366,40 @@ export class World {
     if (enemy.kind === 'splitter' && this.enemies.length < MAX_ENEMIES + 20) {
       for (let i = 0; i < 2; i += 1) {
         this.spawnEnemy('mote', enemy.x + range(this.rng, -14, 14), enemy.y + range(this.rng, -14, 14));
+      }
+    }
+    if (enemy.kind === 'bomber') {
+      // A Cinderburst pops: the blast scorches every foe it catches (and can
+      // set off another burst standing in it) and burns the Warden too if
+      // they are inside the ring when it goes off.
+      const def = ENEMIES.bomber;
+      this.blasts.push({ x: enemy.x, y: enemy.y, r: 12, maxR: def.blast });
+      this.addParticles(enemy.x, enemy.y, '#ff5a2a', 24, 300);
+      this.addParticles(enemy.x, enemy.y, '#ffd23c', 12, 200);
+      this.shake = Math.max(this.shake, 8);
+      this.audio.explode();
+      const p = this.player;
+      if (!this.over && distance(enemy.x, enemy.y, p.x, p.y) < def.blast + p.radius) {
+        this.hurtPlayer(14, enemy.x, enemy.y);
+      }
+      for (const other of this.enemies.slice()) {
+        if (distance(enemy.x, enemy.y, other.x, other.y) < def.blast + other.radius) {
+          this.damageEnemy(other, def.blastDamage, other.x - enemy.x, other.y - enemy.y);
+        }
+      }
+    }
+    if (enemy.elite) {
+      // An elite pays out: a pickup and a burst of big embers where it fell.
+      this.addFloater(enemy.x, enemy.y - enemy.radius - 10, 'ELITE!', '#ffd23c', 20);
+      this.pickups.push({
+        x: enemy.x - 24, y: enemy.y,
+        kind: this.rng() < 0.5 ? 'health' : 'magnet', vx: 0, vy: 0,
+      });
+      for (let i = 0; i < 2; i += 1) {
+        this.gems.push({
+          x: enemy.x + range(this.rng, -40, 40), y: enemy.y + range(this.rng, -40, 40),
+          value: 5, big: true, vx: 0, vy: 0,
+        });
       }
     }
     if (enemy.boss) {
@@ -526,6 +578,13 @@ export class World {
           }
         }
       }
+    }
+
+    // Blast rings expand and fade.
+    for (let i = this.blasts.length - 1; i >= 0; i -= 1) {
+      const blast = this.blasts[i];
+      blast.r += 620 * dt;
+      if (blast.r >= blast.maxR) this.blasts.splice(i, 1);
     }
 
     // Enemies.
@@ -775,12 +834,44 @@ export class World {
     const row = spawnRowAt(this.time);
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0 && this.enemies.length < MAX_ENEMIES) {
-      this.spawnTimer = row.interval;
-      const kinds = ['wisp', 'cinder', 'brute', 'spitter', 'charger', 'splitter'];
+      // During a surge the swarm pours in twice as fast.
+      this.spawnTimer = row.interval * (this.surgeTimer > 0 ? 0.5 : 1);
+      const kinds = ['wisp', 'cinder', 'brute', 'spitter', 'charger', 'splitter', 'bomber'];
       for (let i = 0; i < row.batch; i += 1) {
         if (this.enemies.length >= MAX_ENEMIES) break;
         const kind = pickWeighted(this.rng, kinds.map((k, idx) => ({ weight: row.weights[idx], value: k })));
         this.spawnEnemy(kind);
+      }
+    }
+    // Elites: one grown-large foe on a slow drumbeat, from 45 s on.
+    this.eliteTimer -= dt;
+    if (this.eliteTimer <= 0) {
+      this.eliteTimer = ELITE_EVERY;
+      if (this.time >= ELITE_EVERY && this.enemies.length < MAX_ENEMIES) {
+        const kind = pickWeighted(this.rng, [
+          { weight: 1, value: 'brute' },
+          { weight: 1, value: 'charger' },
+          { weight: 1, value: 'cinder' },
+        ]);
+        this.spawnEnemy(kind, undefined, undefined, true);
+        this.showBanner('AN ELITE JOINS THE SWARM', 1.8);
+      }
+    }
+    // Ember Surges: a doubled swarm for ten seconds and a ring of embers.
+    if (this.surgeTimer > 0) this.surgeTimer -= dt;
+    const surgeAt = SURGE_TIMES[this.surgeIndex];
+    if (surgeAt !== undefined && this.time >= surgeAt) {
+      this.surgeIndex += 1;
+      this.surgeTimer = SURGE_SECONDS;
+      this.showBanner('EMBER SURGE — THE SWARM DESCENDS', 4.5, true);
+      this.audio.surge();
+      for (let i = 0; i < 8; i += 1) {
+        const angle = (i / 8) * TAU;
+        this.gems.push({
+          x: clamp(p.x + Math.cos(angle) * 200, 20, ARENA.width - 20),
+          y: clamp(p.y + Math.sin(angle) * 200, 20, ARENA.height - 20),
+          value: 1, big: false, vx: 0, vy: 0,
+        });
       }
     }
     const nextWave = Math.floor(this.time / 30) + 1;
@@ -828,8 +919,13 @@ export class World {
     enemy.vx = nx;
     enemy.vy = ny;
     if (enemy.patternTimer > 0) return;
-    if (enemy.pattern === 'burst') {
-      enemy.patternTimer = 4.5;
+    // The boss cycles its two patterns in turn, so the second minute of the
+    // fight is not the first minute repeated.
+    const list = enemy.patternList || [enemy.pattern];
+    const current = list[enemy.patternIdx || 0];
+    enemy.pattern = current;
+    if (current === 'burst') {
+      enemy.patternTimer = enemy.patternEvery;
       for (let i = 0; i < 12; i += 1) {
         const angle = (i / 12) * TAU + this.time * 0.3;
         this.foeShots.push({
@@ -839,17 +935,18 @@ export class World {
         });
       }
       this.audio.boss();
-    } else if (enemy.pattern === 'charge') {
-      enemy.patternTimer = 5.5;
+    } else if (current === 'charge') {
+      enemy.patternTimer = enemy.patternEvery;
       enemy.telegraph = 0.7;
       this.shake = Math.max(this.shake, 6);
-    } else if (enemy.pattern === 'minions') {
-      enemy.patternTimer = 6;
+    } else if (current === 'minions') {
+      enemy.patternTimer = enemy.patternEvery;
       for (let i = 0; i < 5; i += 1) {
         const angle = (i / 5) * TAU;
         this.spawnEnemy('wisp', enemy.x + Math.cos(angle) * 70, enemy.y + Math.sin(angle) * 70);
       }
       this.showBanner('THE TITAN CALLS ITS SWARM', 1.8);
     }
+    enemy.patternIdx = ((enemy.patternIdx || 0) + 1) % list.length;
   }
 }

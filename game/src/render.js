@@ -6,6 +6,31 @@ import { clamp } from './random.js';
 
 const TAU = Math.PI * 2;
 
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// A soft radial halo, pre-rendered once per colour: the same look as a
+// shadowBlur glow, but a single drawImage per frame instead of a blur pass.
+// (Per-frame shadowBlur on a hundred enemies is what used to cost the game
+// its frame rate in software rendering: 8 fps at 70 enemies, 60 without it.)
+function makeGlowSprite(color) {
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 64;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(32, 32, 2, 32, 32, 32);
+  grad.addColorStop(0, hexToRgba(color, 0.55));
+  grad.addColorStop(0.45, hexToRgba(color, 0.22));
+  grad.addColorStop(1, hexToRgba(color, 0));
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  return c;
+}
+
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -35,6 +60,7 @@ export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    this.glowSprites = new Map();
     this.motes = [];
     for (let i = 0; i < 70; i += 1) {
       this.motes.push({
@@ -45,6 +71,18 @@ export class Renderer {
         drift: Math.random() * TAU,
       });
     }
+  }
+
+  // A pre-rendered halo under a sprite, centred on (x, y): `radius` is the
+  // sprite's own radius, `blur` how far the halo reaches past it.
+  drawGlow(ctx, x, y, radius, blur, color) {
+    let sprite = this.glowSprites.get(color);
+    if (!sprite) {
+      sprite = makeGlowSprite(color);
+      this.glowSprites.set(color, sprite);
+    }
+    const size = (radius + blur) * 2;
+    ctx.drawImage(sprite, x - size / 2, y - size / 2, size, size);
   }
 
   camera(world) {
@@ -121,12 +159,11 @@ export class Renderer {
       if (gx < -20 || gx > VIEW.width + 20 || gy < -20 || gy > VIEW.height + 20) continue;
       const size = gem.big ? 9 : 6;
       const pulse = 1 + 0.12 * Math.sin(world.time * 5 + gem.x);
+      this.drawGlow(ctx, gx, gy, size, 10, gem.big ? PALETTE.gemBig : PALETTE.gem);
       ctx.save();
       ctx.translate(gx, gy);
       ctx.rotate(Math.PI / 4);
       ctx.fillStyle = gem.big ? PALETTE.gemBig : PALETTE.gem;
-      ctx.shadowColor = gem.big ? '#ffd23c' : '#ffa62b';
-      ctx.shadowBlur = 10;
       ctx.fillRect(-size * pulse / 2, -size * pulse / 2, size * pulse, size * pulse);
       ctx.restore();
     }
@@ -137,24 +174,20 @@ export class Renderer {
       const py = pickup.y - cam.y;
       const bob = Math.sin(world.time * 4 + pickup.x) * 3;
       ctx.save();
-      ctx.shadowBlur = 12;
+      this.drawGlow(ctx, px, py + bob, 13, 12, pickup.kind === 'health' ? PALETTE.health : PALETTE.magnet);
       if (pickup.kind === 'health') {
         ctx.fillStyle = PALETTE.health;
-        ctx.shadowColor = '#7ee081';
         ctx.beginPath();
         ctx.arc(px, py + bob, 13, 0, TAU);
         ctx.fill();
-        ctx.shadowBlur = 0;
         ctx.fillStyle = '#0b2b12';
         ctx.fillRect(px - 7, py + bob - 2, 14, 4);
         ctx.fillRect(px - 2, py + bob - 7, 4, 14);
       } else {
         ctx.fillStyle = PALETTE.magnet;
-        ctx.shadowColor = '#6ec6ff';
         ctx.beginPath();
         ctx.arc(px, py + bob, 13, 0, TAU);
         ctx.fill();
-        ctx.shadowBlur = 0;
         ctx.strokeStyle = '#0b2b4d';
         ctx.lineWidth = 4;
         ctx.beginPath();
@@ -176,12 +209,12 @@ export class Renderer {
       const sx = shot.x - cam.x;
       const sy = shot.y - cam.y;
       const angle = Math.atan2(shot.vy, shot.vx);
+      const glowColor = shot.kind === 'shard' ? PALETTE.shard : PALETTE.shot;
+      this.drawGlow(ctx, sx, sy, 6, 12, glowColor);
       ctx.save();
       ctx.translate(sx, sy);
       ctx.rotate(angle);
-      ctx.fillStyle = shot.kind === 'shard' ? PALETTE.shard : PALETTE.shot;
-      ctx.shadowColor = shot.kind === 'shard' ? '#a8e6ff' : '#ffd9a0';
-      ctx.shadowBlur = 12;
+      ctx.fillStyle = glowColor;
       ctx.beginPath();
       ctx.moveTo(10, 0);
       ctx.lineTo(-8, -4);
@@ -200,9 +233,8 @@ export class Renderer {
         const angle = state.angle + (i * TAU) / def;
         const bx = world.player.x + Math.cos(angle) * radius - cam.x;
         const by = world.player.y + Math.sin(angle) * radius - cam.y;
+        this.drawGlow(ctx, bx, by, 9, 16, '#ff7b2f');
         ctx.fillStyle = '#ff7b2f';
-        ctx.shadowColor = '#ff9a3c';
-        ctx.shadowBlur = 16;
         ctx.beginPath();
         ctx.arc(bx, by, 9, 0, TAU);
         ctx.fill();
@@ -224,6 +256,20 @@ export class Renderer {
       ctx.stroke();
     }
 
+    // Blast rings from popped Cinderbursts.
+    for (const blast of world.blasts) {
+      const alpha = 1 - blast.r / blast.maxR;
+      ctx.fillStyle = `rgba(255, 154, 60, ${alpha * 0.22})`;
+      ctx.beginPath();
+      ctx.arc(blast.x - cam.x, blast.y - cam.y, blast.r, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255, 90, 42, ${alpha})`;
+      ctx.lineWidth = 12 * alpha + 3;
+      ctx.beginPath();
+      ctx.arc(blast.x - cam.x, blast.y - cam.y, blast.r, 0, TAU);
+      ctx.stroke();
+    }
+
     // Player.
     this.drawPlayer(ctx, world, cam);
 
@@ -231,9 +277,8 @@ export class Renderer {
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     for (const shot of world.foeShots) {
+      this.drawGlow(ctx, shot.x - cam.x, shot.y - cam.y, shot.radius, 10, '#7ee081');
       ctx.fillStyle = '#c6ff7a';
-      ctx.shadowColor = '#7ee081';
-      ctx.shadowBlur = 10;
       ctx.beginPath();
       ctx.arc(shot.x - cam.x, shot.y - cam.y, shot.radius, 0, TAU);
       ctx.fill();
@@ -277,20 +322,17 @@ export class Renderer {
     ctx.strokeStyle = 'rgba(0,0,0,0.45)';
     ctx.lineWidth = 2;
     if (enemy.kind === 'wisp') {
-      ctx.shadowColor = enemy.color;
-      ctx.shadowBlur = 14;
+      this.drawGlow(ctx, x, y, enemy.radius, 14, enemy.color);
       ctx.beginPath();
       ctx.arc(x, y, enemy.radius, 0, TAU);
       ctx.fill();
-      ctx.shadowBlur = 0;
       ctx.fillStyle = '#efe6ff';
       ctx.beginPath();
       ctx.arc(x - 3, y - 2, 3, 0, TAU);
       ctx.arc(x + 4, y + 1, 2.4, 0, TAU);
       ctx.fill();
     } else if (enemy.kind === 'cinder') {
-      ctx.shadowColor = enemy.color;
-      ctx.shadowBlur = 12;
+      this.drawGlow(ctx, x, y, enemy.radius, 12, enemy.color);
       ctx.beginPath();
       for (let i = 0; i < 8; i += 1) {
         const angle = (i / 8) * TAU + time * 0.8;
@@ -302,19 +344,16 @@ export class Renderer {
       }
       ctx.closePath();
       ctx.fill();
-      ctx.shadowBlur = 0;
       ctx.fillStyle = '#ffd9a0';
       ctx.beginPath();
       ctx.arc(x, y, 4, 0, TAU);
       ctx.fill();
     } else if (enemy.kind === 'brute') {
-      ctx.shadowColor = enemy.color;
-      ctx.shadowBlur = 10;
+      this.drawGlow(ctx, x, y, enemy.radius, 10, enemy.color);
       ctx.beginPath();
       ctx.arc(x, y, enemy.radius, 0, TAU);
       ctx.fill();
       ctx.stroke();
-      ctx.shadowBlur = 0;
       ctx.strokeStyle = 'rgba(0,0,0,0.5)';
       ctx.beginPath();
       ctx.moveTo(x - 10, y - 6);
@@ -329,38 +368,32 @@ export class Renderer {
       ctx.arc(x + 8, y - 5, 3, 0, TAU);
       ctx.fill();
     } else if (enemy.kind === 'spitter') {
-      ctx.shadowColor = enemy.color;
-      ctx.shadowBlur = 12;
+      this.drawGlow(ctx, x, y, enemy.radius, 12, enemy.color);
       ctx.beginPath();
       ctx.arc(x, y, enemy.radius, 0, TAU);
       ctx.fill();
-      ctx.shadowBlur = 0;
       ctx.fillStyle = '#0b2b12';
       ctx.beginPath();
       ctx.arc(x, y, 4.5, 0, TAU);
       ctx.fill();
     } else if (enemy.kind === 'charger') {
       // A lunging diamond: the wind-up flash (telegraph) already pulses it.
-      ctx.shadowColor = enemy.color;
-      ctx.shadowBlur = 14;
+      this.drawGlow(ctx, x, y, enemy.radius, 14, enemy.color);
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(Math.PI / 4);
       const r = enemy.radius + (enemy.mode === 'windup' ? 3 : 0);
       ctx.fillRect(-r * 0.75, -r * 0.75, r * 1.5, r * 1.5);
       ctx.restore();
-      ctx.shadowBlur = 0;
       ctx.fillStyle = '#fff3d6';
       ctx.beginPath();
       ctx.arc(x, y, 4, 0, TAU);
       ctx.fill();
     } else if (enemy.kind === 'splitter') {
-      ctx.shadowColor = enemy.color;
-      ctx.shadowBlur = 12;
+      this.drawGlow(ctx, x, y, enemy.radius, 12, enemy.color);
       ctx.beginPath();
       ctx.arc(x, y, enemy.radius, 0, TAU);
       ctx.fill();
-      ctx.shadowBlur = 0;
       ctx.fillStyle = 'rgba(0,0,0,0.4)';
       ctx.beginPath();
       ctx.arc(x - 5, y - 3, 3.4, 0, TAU);
@@ -368,23 +401,36 @@ export class Renderer {
       ctx.arc(x, y + 5, 3.4, 0, TAU);
       ctx.fill();
     } else if (enemy.kind === 'mote') {
-      ctx.shadowColor = enemy.color;
-      ctx.shadowBlur = 10;
+      this.drawGlow(ctx, x, y, enemy.radius, 10, enemy.color);
       ctx.beginPath();
       ctx.arc(x, y, enemy.radius, 0, TAU);
       ctx.fill();
-      ctx.shadowBlur = 0;
       ctx.fillStyle = '#efe6ff';
       ctx.beginPath();
       ctx.arc(x, y, 2.4, 0, TAU);
       ctx.fill();
-    } else if (enemy.boss) {
-      ctx.shadowColor = enemy.ring;
-      ctx.shadowBlur = 22;
+    } else if (enemy.kind === 'bomber') {
+      // A volatile Cinderburst: a pulsing fuse core that begs to be popped
+      // at range, never inside the pack.
+      this.drawGlow(ctx, x, y, enemy.radius, 16, enemy.color);
       ctx.beginPath();
       ctx.arc(x, y, enemy.radius, 0, TAU);
       ctx.fill();
-      ctx.shadowBlur = 0;
+      const pulse = 0.6 + 0.4 * Math.sin(time * 10 + enemy.wobble);
+      ctx.fillStyle = `rgba(255, 210, 60, ${pulse})`;
+      ctx.beginPath();
+      ctx.arc(x, y, 5 + pulse * 2, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 90, 42, 0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, enemy.radius + 3 + Math.sin(time * 10) * 1.5, 0, TAU);
+      ctx.stroke();
+    } else if (enemy.boss) {
+      this.drawGlow(ctx, x, y, enemy.radius, 22, enemy.ring);
+      ctx.beginPath();
+      ctx.arc(x, y, enemy.radius, 0, TAU);
+      ctx.fill();
       ctx.strokeStyle = enemy.ring;
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -407,6 +453,14 @@ export class Renderer {
       ctx.arc(x, y, enemy.radius, 0, TAU);
       ctx.fill();
       ctx.globalAlpha = 1;
+    }
+    // Elites wear a gold ring: worth the focus fire, worth the payout.
+    if (enemy.elite) {
+      ctx.strokeStyle = '#ffd23c';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, enemy.radius + 6, 0, TAU);
+      ctx.stroke();
     }
     if (enemy.slowTimer > 0) {
       ctx.strokeStyle = 'rgba(168, 230, 255, 0.8)';
@@ -437,13 +491,11 @@ export class Renderer {
     const bob = p.moving ? Math.sin(p.walkCycle) * 2 : 0;
     ctx.save();
     if (p.iframes > 0 && Math.floor(p.iframes * 20) % 2 === 0) ctx.globalAlpha = 0.45;
-    ctx.shadowColor = PALETTE.playerRing;
-    ctx.shadowBlur = 18;
+    this.drawGlow(ctx, x, y + bob, p.radius, 18, PALETTE.playerRing);
     ctx.fillStyle = PALETTE.player;
     ctx.beginPath();
     ctx.arc(x, y + bob, p.radius, 0, TAU);
     ctx.fill();
-    ctx.shadowBlur = 0;
     ctx.fillStyle = PALETTE.playerCore;
     ctx.beginPath();
     ctx.arc(x, y + bob, p.radius * 0.55, 0, TAU);
@@ -510,7 +562,7 @@ export class Renderer {
     text(ctx, `${Math.ceil(p.hp)} / ${p.maxHp}`, 124, 96, 13, '#ffffff');
     // Timer and wave, top centre, on a dark pill so the swarm never hides it.
     const remain = SURVIVE_SECONDS - world.time;
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
     roundRect(ctx, VIEW.width / 2 - 112, 16, 224, 66, 10);
     ctx.fill();
     text(ctx, formatTime(remain), VIEW.width / 2, 42, 34, PALETTE.text);
@@ -618,6 +670,7 @@ export class Renderer {
     text(ctx, 'S U R V I V E   T H E   S W A R M', VIEW.width / 2, 252, 22, '#ff7b2f');
     text(ctx, '✦  Five weapons, five passives — build your arsenal as you level', VIEW.width / 2, 312, 17, PALETTE.text);
     text(ctx, '❂  Bosses wake at 1:00, 2:30 and 4:00 — survive until dawn, 5:00', VIEW.width / 2, 338, 17, PALETTE.text);
+    text(ctx, '◎  Elites, ember surges and exploding Cinderbursts keep the night honest', VIEW.width / 2, 364, 17, PALETTE.text);
     const pulse = 0.65 + 0.35 * Math.sin(world.time * 3);
     ctx.globalAlpha = pulse;
     text(ctx, 'CLICK OR PRESS ENTER TO PLAY', VIEW.width / 2, 412, 24, '#ffd23c');
@@ -769,6 +822,9 @@ export class Renderer {
       'Tip: a Charger flashes before it lunges — sidestep, don\'t outrun it.',
       'Tip: a magnet pickup vacuums every ember on the field.',
       'Tip: bosses telegraph their charge — step aside as they flash.',
+      'Tip: a Cinderburst pops when it dies — lure it into the pack, then step back.',
+      'Tip: an Ember Surge doubles the swarm for ten seconds — grab the ring of embers it drops.',
+      'Tip: gold-ringed elites are tough, but they pay out a pickup and big embers.',
     ];
     text(ctx, tips[Math.floor(world.time) % tips.length], VIEW.width / 2, py + panelH + 34, 15, PALETTE.textDim);
     const pulse = 0.65 + 0.35 * Math.sin(world.time * 3);
